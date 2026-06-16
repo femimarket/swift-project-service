@@ -9,16 +9,16 @@
 import Foundation
 import ImageIO
 
-enum ProjectService {
+public enum ProjectService {
     /// App sandbox `Documents/`.
-    static var documents: URL {
+    public static var documents: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
     }
 
     /// Embed XMP metadata (prompt + model) into the image bytes and write
     /// them to `Documents/<file>`. When both `prompt` and `model` are nil,
     /// the input bytes are written through unchanged.
-    static func saveFile(
+    public static func saveFile(
         _ data: Data,
         named file: String,
         prompt: String? = nil,
@@ -112,7 +112,7 @@ enum ProjectService {
 
     /// Set the like state by writing `xmp:Rating` (5 = liked, 0 = not).
     /// Atomic: every step completes or the function crashes.
-    static func like(_ file: String, _ liked: Bool) {
+    public static func like(_ file: String, _ liked: Bool) {
         let url = getUrl(for: file)
         let source = CGImageSourceCreateWithURL(url as CFURL, nil)!
         let type = CGImageSourceGetType(source)!
@@ -159,7 +159,7 @@ enum ProjectService {
     }
 
     /// List every file in the app's Documents folder.
-    static func getAllGenerations() -> [URL] {
+    public static func getAllGenerations() -> [URL] {
         (try? FileManager.default.contentsOfDirectory(
             at: documents, includingPropertiesForKeys: nil
         )) ?? []
@@ -167,7 +167,7 @@ enum ProjectService {
 
     /// Replace the audio file in `Documents/`. Any existing audio files are
     /// deleted first, then `data` is written as `file`.
-    static func saveAudio(_ data: Data, named file: String) {
+    public static func saveAudio(_ data: Data, named file: String) {
         for url in getAllGenerations() where isAudio(url) {
             try! FileManager.default.removeItem(at: url)
         }
@@ -189,7 +189,7 @@ enum ProjectService {
     }
 
     /// Returns the URL of the lone audio file in `Documents/`, if any.
-    static func getAudio() -> URL? {
+    public static func getAudio() -> URL? {
         getAllGenerations().first(where: isAudio)
     }
 
@@ -202,17 +202,17 @@ enum ProjectService {
     }
 
     /// Read `dc:description` from an image. Nil when absent.
-    static func getPrompt(_ file: String) -> String? {
+    public static func getPrompt(_ file: String) -> String? {
         readStringProperty(file, path: "dc:description")
     }
 
     /// Read `xmp:CreatorTool` from an image. Nil when absent.
-    static func getModel(_ file: String) -> String? {
+    public static func getModel(_ file: String) -> String? {
         readStringProperty(file, path: "xmp:CreatorTool")
     }
 
     /// Read the like state of an image from its `xmp:Rating` (`>= 1` = liked).
-    static func getLike(_ file: String) -> Bool {
+    public static func getLike(_ file: String) -> Bool {
         let url = getUrl(for: file)
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let metadata = CGImageSourceCopyMetadataAtIndex(source, 0, nil),
@@ -242,7 +242,7 @@ enum ProjectService {
         return string
     }
 
-    static func getUrl(for file: String) -> URL {
+    public static func getUrl(for file: String) -> URL {
         documents.appendingPathComponent(URL(fileURLWithPath: file).lastPathComponent)
     }
 }
