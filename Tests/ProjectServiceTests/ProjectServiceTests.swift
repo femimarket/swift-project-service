@@ -46,6 +46,18 @@ struct ProjectServiceTests {
         #expect(ProjectService.getModel(file) == "m")
     }
 
+    @Test func saveFileWritesIptcExtAIPromptInformation() {
+        let file = name("iptcext-prompt.png")
+        ProjectService.saveFile(makePNG(), named: file, prompt: "what is AI")
+        #expect(rawXMPTag(file: file, path: "Iptc4xmpExt:AIPromptInformation") == "what is AI")
+    }
+
+    @Test func saveFileWritesIptcExtAISystemUsed() {
+        let file = name("iptcext-model.png")
+        ProjectService.saveFile(makePNG(), named: file, model: "dalle-3")
+        #expect(rawXMPTag(file: file, path: "Iptc4xmpExt:AISystemUsed") == "dalle-3")
+    }
+
     @Test func saveFileOverwritesExisting() {
         let file = name("overwrite.png")
         ProjectService.saveFile(makePNG(), named: file, prompt: "first")
@@ -150,6 +162,17 @@ struct ProjectServiceTests {
     }
 
     // MARK: - helpers
+
+    private func rawXMPTag(file: String, path: String) -> String? {
+        let url = ProjectService.getUrl(for: file)
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let metadata = CGImageSourceCopyMetadataAtIndex(source, 0, nil),
+              let tag = CGImageMetadataCopyTagWithPath(metadata, nil, path as CFString) else {
+            return nil
+        }
+        let raw = CGImageMetadataTagCopyValue(tag)
+        return (raw as? String) ?? (raw as? NSString).map(String.init)
+    }
 
     private func makePNG() -> Data {
         let space = CGColorSpaceCreateDeviceRGB()

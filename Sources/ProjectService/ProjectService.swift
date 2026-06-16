@@ -15,10 +15,17 @@ public enum ProjectService {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
     }
 
-    /// Embed `prompt` as IPTC Caption/Abstract (XMP `dc:description`) and
-    /// `model` as TIFF Software (XMP `xmp:CreatorTool`), then write to
-    /// `Documents/<file>`. When both are nil the input bytes are written
-    /// through unchanged.
+    /// Embed `prompt` as both `dc:description` (via IPTC Caption/Abstract,
+    /// proper Lang Alt) and `iptcExt:AIPromptInformation`. Embed `model` as
+    /// both `xmp:CreatorTool` (via TIFF Software) and `iptcExt:AISystemUsed`.
+    /// Then write to `Documents/<file>`. When both are nil the input bytes
+    /// are written through unchanged.
+    ///
+    /// Done in two ImageIO passes because the high-level properties path
+    /// (needed for proper structural encoding of `dc:description`) ignores
+    /// `kCGImageDestinationMetadata`, and the low-level metadata path needed
+    /// for the custom `iptcExt` namespace can't produce a structured Lang Alt
+    /// from a plain string.
     public static func saveFile(
         _ data: Data,
         named file: String,
@@ -32,6 +39,7 @@ public enum ProjectService {
             let source = CGImageSourceCreateWithData(data as CFData, nil)!
             let type = CGImageSourceGetType(source)!
 
+            // Pass 1: high-level properties → dc:description + xmp:CreatorTool.
             var properties: [CFString: Any] = [:]
             if let prompt {
                 properties[kCGImagePropertyIPTCDictionary] = [
@@ -43,11 +51,34 @@ public enum ProjectService {
                     kCGImagePropertyTIFFSoftware: model
                 ] as [CFString: Any]
             }
+            let stage1 = NSMutableData()
+            let stage1Dest = CGImageDestinationCreateWithData(stage1 as CFMutableData, type, 1, nil)!
+            CGImageDestinationAddImageFromSource(stage1Dest, source, 0, properties as CFDictionary)
+            precondition(CGImageDestinationFinalize(stage1Dest), "Pass 1 finalize failed for \(file)")
 
+            // Pass 2: low-level metadata → iptcExt:AIPromptInformation + iptcExt:AISystemUsed.
+            let metadata = CGImageMetadataCreateMutable()
+            precondition(
+                CGImageMetadataRegisterNamespaceForPrefix(metadata, iptcExtURI as CFString, "iptcExt" as CFString, nil),
+                "iptcExt namespace register failed"
+            )
+            if let prompt {
+                setIptcExtTag(metadata, path: "AIPromptInformation", value: prompt, file: file)
+            }
+            if let model {
+                setIptcExtTag(metadata, path: "AISystemUsed", value: model, file: file)
+            }
+            let stage1Source = CGImageSourceCreateWithData(stage1 as CFData, nil)!
             let buffer = NSMutableData()
             let cgDest = CGImageDestinationCreateWithData(buffer as CFMutableData, type, 1, nil)!
-            CGImageDestinationAddImageFromSource(cgDest, source, 0, properties as CFDictionary)
-            precondition(CGImageDestinationFinalize(cgDest), "Finalize failed for \(file)")
+            var error: Unmanaged<CFError>?
+            let ok = CGImageDestinationCopyImageSource(
+                cgDest, stage1Source,
+                [kCGImageDestinationMetadata: metadata,
+                 kCGImageDestinationMergeMetadata: true] as CFDictionary,
+                &error
+            )
+            precondition(ok, "CopyImageSource failed for \(file): \(error?.takeRetainedValue().localizedDescription ?? "nil")")
             out = buffer as Data
         }
 
@@ -186,5 +217,26 @@ public enum ProjectService {
 
     public static func getUrl(for file: String) -> URL {
         documents.appendingPathComponent(URL(fileURLWithPath: file).lastPathComponent)
+    }
+
+    private static let iptcExtURI = "http://iptc.org/std/Iptc4xmpExt/2008-02-29/"
+
+    private static func setIptcExtTag(
+        _ metadata: CGMutableImageMetadata,
+        path: String,
+        value: String,
+        file: String
+    ) {
+        let tag = CGImageMetadataTagCreate(
+            iptcExtURI as CFString,
+            "iptcExt" as CFString,
+            path as CFString,
+            .default,
+            value as CFString
+        )!
+        precondition(
+            CGImageMetadataSetTagWithPath(metadata, nil, "iptcExt:\(path)" as CFString, tag),
+            "iptcExt:\(path) set failed for \(file)"
+        )
     }
 }
