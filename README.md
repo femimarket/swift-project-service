@@ -24,16 +24,19 @@ Then add `"ProjectService"` as a dependency of any target that needs it.
 ```swift
 import ProjectService
 
-// Save an image, embedding prompt and/or model into the XMP block.
-ProjectService.saveFile(imageData, named: "out.png", prompt: "a fox", model: "dalle-3")
+// Save an image, embedding prompt, model and/or keywords into the XMP block.
+ProjectService.saveFile(imageData, named: "out.png",
+                        prompt: "a fox", model: "dalle-3",
+                        subject: ["fox", "wildlife"])
 
 // Toggle the "liked" flag (IPTC StarRating: 5 / 0).
 ProjectService.like("out.png", true)
 
 // Read what was embedded.
-ProjectService.getPrompt("out.png")   // "a fox"
-ProjectService.getModel("out.png")    // "dalle-3"
-ProjectService.getLike("out.png")     // true
+ProjectService.getPrompt("out.png")    // "a fox"
+ProjectService.getModel("out.png")     // "dalle-3"
+ProjectService.getSubject("out.png")   // ["fox", "wildlife"]
+ProjectService.getLike("out.png")      // true
 
 // Resolve a name to a URL (handy for image views, share sheets, etc.).
 let url = ProjectService.getUrl(for: "out.png")
@@ -59,6 +62,7 @@ ProjectService.getAudio()             // URL? — the lone audio file, if any
 |---|---|
 | `prompt` | `dc:description` (Lang Alt) and `Iptc4xmpExt:AIPromptInformation` |
 | `model` | `xmp:CreatorTool` and `Iptc4xmpExt:AISystemUsed` |
+| `subject` | `dc:subject` (Bag of strings, via IPTC Keywords) |
 | `liked` | `xmp:Rating` (via IPTC StarRating: 5 = liked, 0 = not) |
 
 The duplication is intentional: the `dc:`/`xmp:` fields are universally recognized by XMP readers (Photoshop, exiftool, Finder previews); the `Iptc4xmpExt:AI*` fields are the IPTC-standard locations for AI-generated content metadata. Embedding both means broad compatibility plus AI-content provenance in the correct place.

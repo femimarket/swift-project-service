@@ -18,33 +18,40 @@ public enum ProjectService {
     /// Embed `prompt` as both `dc:description` (via IPTC Caption/Abstract,
     /// proper Lang Alt) and `iptcExt:AIPromptInformation`. Embed `model` as
     /// both `xmp:CreatorTool` (via TIFF Software) and `iptcExt:AISystemUsed`.
-    /// Then write to `Documents/<file>`. When both are nil the input bytes
+    /// Embed `subject` as `dc:subject` (via IPTC Keywords, a Bag of strings).
+    /// Then write to `Documents/<file>`. When all are nil the input bytes
     /// are written through unchanged.
     ///
     /// Done in two ImageIO passes because the high-level properties path
-    /// (needed for proper structural encoding of `dc:description`) ignores
-    /// `kCGImageDestinationMetadata`, and the low-level metadata path needed
-    /// for the custom `iptcExt` namespace can't produce a structured Lang Alt
-    /// from a plain string.
+    /// (needed for proper structural encoding of `dc:description` and
+    /// `dc:subject`) ignores `kCGImageDestinationMetadata`, and the low-level
+    /// metadata path needed for the custom `iptcExt` namespace can't produce
+    /// a structured Lang Alt from a plain string.
     public static func saveFile(
         _ data: Data,
         named file: String,
         prompt: String? = nil,
-        model: String? = nil
+        model: String? = nil,
+        subject: [String]? = nil
     ) {
         let out: Data
-        if prompt == nil && model == nil {
+        if prompt == nil && model == nil && subject == nil {
             out = data
         } else {
             let source = CGImageSourceCreateWithData(data as CFData, nil)!
             let type = CGImageSourceGetType(source)!
 
-            // Pass 1: high-level properties → dc:description + xmp:CreatorTool.
+            // Pass 1: high-level properties → dc:description + dc:subject + xmp:CreatorTool.
             var properties: [CFString: Any] = [:]
+            var iptc: [CFString: Any] = [:]
             if let prompt {
-                properties[kCGImagePropertyIPTCDictionary] = [
-                    kCGImagePropertyIPTCCaptionAbstract: prompt
-                ] as [CFString: Any]
+                iptc[kCGImagePropertyIPTCCaptionAbstract] = prompt
+            }
+            if let subject, !subject.isEmpty {
+                iptc[kCGImagePropertyIPTCKeywords] = subject
+            }
+            if !iptc.isEmpty {
+                properties[kCGImagePropertyIPTCDictionary] = iptc
             }
             if let model {
                 properties[kCGImagePropertyTIFFDictionary] = [
@@ -187,6 +194,20 @@ public enum ProjectService {
         let string = (raw as? String) ?? (raw as? NSString).map(String.init)
         guard let string, !string.isEmpty else { return nil }
         return string
+    }
+
+    /// Read the subject keywords from IPTC Keywords (XMP `dc:subject`).
+    /// Nil when absent.
+    public static func getSubject(_ file: String) -> [String]? {
+        let url = getUrl(for: file)
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let iptc = props[kCGImagePropertyIPTCDictionary] as? [CFString: Any],
+              let keywords = iptc[kCGImagePropertyIPTCKeywords] as? [String],
+              !keywords.isEmpty else {
+            return nil
+        }
+        return keywords
     }
 
     /// Read the like state from IPTC StarRating (`>= 1` = liked).

@@ -58,6 +58,32 @@ struct ProjectServiceTests {
         #expect(rawXMPTag(file: file, path: "Iptc4xmpExt:AISystemUsed") == "dalle-3")
     }
 
+    @Test func saveFileEmbedsSubject() {
+        let file = name("subject.png")
+        ProjectService.saveFile(makePNG(), named: file, subject: ["cat", "fluffy", "studio"])
+        #expect(ProjectService.getSubject(file) == ["cat", "fluffy", "studio"])
+    }
+
+    @Test func saveFileEmbedsAllThree() {
+        let file = name("all.png")
+        ProjectService.saveFile(makePNG(), named: file, prompt: "p", model: "m", subject: ["a", "b"])
+        #expect(ProjectService.getPrompt(file) == "p")
+        #expect(ProjectService.getModel(file) == "m")
+        #expect(ProjectService.getSubject(file) == ["a", "b"])
+    }
+
+    @Test func getSubjectNilWhenAbsent() {
+        let file = name("no-subject.png")
+        ProjectService.saveFile(makePNG(), named: file)
+        #expect(ProjectService.getSubject(file) == nil)
+    }
+
+    @Test func getSubjectNilWhenEmptyArrayPassed() {
+        let file = name("empty-subject.png")
+        ProjectService.saveFile(makePNG(), named: file, subject: [])
+        #expect(ProjectService.getSubject(file) == nil)
+    }
+
     @Test func saveFileOverwritesExisting() {
         let file = name("overwrite.png")
         ProjectService.saveFile(makePNG(), named: file, prompt: "first")
