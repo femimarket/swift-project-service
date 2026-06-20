@@ -1,0 +1,5 @@
+module XMPToolkit {
+    header "projectservice_xmp.h"
+    link "projectservice_xmp"
+    export *
+}

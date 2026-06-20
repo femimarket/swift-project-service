@@ -2,6 +2,7 @@ import Testing
 import Foundation
 import ImageIO
 import CoreGraphics
+import XMPToolkit
 @testable import ProjectService
 
 @Suite("ProjectService", .serialized)
@@ -49,13 +50,13 @@ struct ProjectServiceTests {
     @Test func saveFileWritesIptcExtAIPromptInformation() {
         let file = name("iptcext-prompt.png")
         ProjectService.saveFile(makePNG(), named: file, prompt: "what is AI")
-        #expect(rawXMPTag(file: file, path: "Iptc4xmpExt:AIPromptInformation") == "what is AI")
+        #expect(rawXMPProperty(file: file, ns: iptcExtNS, name: "AIPromptInformation") == "what is AI")
     }
 
     @Test func saveFileWritesIptcExtAISystemUsed() {
         let file = name("iptcext-model.png")
         ProjectService.saveFile(makePNG(), named: file, model: "dalle-3")
-        #expect(rawXMPTag(file: file, path: "Iptc4xmpExt:AISystemUsed") == "dalle-3")
+        #expect(rawXMPProperty(file: file, ns: iptcExtNS, name: "AISystemUsed") == "dalle-3")
     }
 
     @Test func saveFileEmbedsSubject() {
@@ -189,15 +190,23 @@ struct ProjectServiceTests {
 
     // MARK: - helpers
 
-    private func rawXMPTag(file: String, path: String) -> String? {
+    private let iptcExtNS = "http://iptc.org/std/Iptc4xmpExt/2008-02-29/"
+
+    private func rawXMPProperty(file: String, ns: String, name: String) -> String? {
         let url = ProjectService.getUrl(for: file)
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let metadata = CGImageSourceCopyMetadataAtIndex(source, 0, nil),
-              let tag = CGImageMetadataCopyTagWithPath(metadata, nil, path as CFString) else {
-            return nil
+        var buf = [CChar](repeating: 0, count: 8192)
+        let written = url.path.withCString { path in
+            ns.withCString { nsPtr in
+                name.withCString { namePtr in
+                    buf.withUnsafeMutableBufferPointer { bufPtr in
+                        psxmp_read_property(path, nsPtr, namePtr, bufPtr.baseAddress, Int32(bufPtr.count))
+                    }
+                }
+            }
         }
-        let raw = CGImageMetadataTagCopyValue(tag)
-        return (raw as? String) ?? (raw as? NSString).map(String.init)
+        guard written > 0 else { return nil }
+        let bytes = buf.prefix(Int(written)).map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     private func makePNG() -> Data {

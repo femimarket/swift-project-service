@@ -1,0 +1,12 @@
+[package]
+name = "projectservice-xmp"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "projectservice_xmp"
+crate-type = ["staticlib"]
+
+[dependencies]
+xmp_toolkit = "1"

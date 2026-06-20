@@ -3,11 +3,15 @@
 //  femi
 //
 //  Local file storage boundary. Every save and read goes through here;
-//  nothing in this module touches the network or upload API.
+//  nothing in this module touches the network or upload API. All XMP
+//  metadata is written and read via the Adobe XMP Toolkit (xmp-toolkit-rs),
+//  exposed through the XMPToolkit binary target. The toolkit's smart
+//  handler picks the right packet location per format (JPEG APP1, PNG iTXt,
+//  TIFF tag, MP4 `uuid` box, MOV `XMP_` atom, etc.).
 //
 
 import Foundation
-import ImageIO
+import XMPToolkit
 
 public enum ProjectService {
     /// App sandbox `Documents/`.
@@ -15,18 +19,14 @@ public enum ProjectService {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
     }
 
-    /// Embed `prompt` as both `dc:description` (via IPTC Caption/Abstract,
-    /// proper Lang Alt) and `iptcExt:AIPromptInformation`. Embed `model` as
-    /// both `xmp:CreatorTool` (via TIFF Software) and `iptcExt:AISystemUsed`.
-    /// Embed `subject` as `dc:subject` (via IPTC Keywords, a Bag of strings).
-    /// Then write to `Documents/<file>`. When all are nil the input bytes
-    /// are written through unchanged.
+    /// Embed XMP metadata into `data` (any format the toolkit recognizes)
+    /// and write to `Documents/<file>`.
     ///
-    /// Done in two ImageIO passes because the high-level properties path
-    /// (needed for proper structural encoding of `dc:description` and
-    /// `dc:subject`) ignores `kCGImageDestinationMetadata`, and the low-level
-    /// metadata path needed for the custom `iptcExt` namespace can't produce
-    /// a structured Lang Alt from a plain string.
+    /// - prompt → `dc:description` (Lang Alt) and `Iptc4xmpExt:AIPromptInformation`.
+    /// - model  → `xmp:CreatorTool` and `Iptc4xmpExt:AISystemUsed`.
+    /// - subject → `dc:subject` (Bag).
+    ///
+    /// When all three are nil the input bytes are written through unchanged.
     public static func saveFile(
         _ data: Data,
         named file: String,
@@ -34,104 +34,21 @@ public enum ProjectService {
         model: String? = nil,
         subject: [String]? = nil
     ) {
-        let out: Data
+        let bytes: Data
         if prompt == nil && model == nil && subject == nil {
-            out = data
+            bytes = data
         } else {
-            let source = CGImageSourceCreateWithData(data as CFData, nil)!
-            let type = CGImageSourceGetType(source)!
-
-            // Pass 1: high-level properties → dc:description + dc:subject + xmp:CreatorTool.
-            var properties: [CFString: Any] = [:]
-            var iptc: [CFString: Any] = [:]
-            if let prompt {
-                iptc[kCGImagePropertyIPTCCaptionAbstract] = prompt
-            }
-            if let subject, !subject.isEmpty {
-                iptc[kCGImagePropertyIPTCKeywords] = subject
-            }
-            if !iptc.isEmpty {
-                properties[kCGImagePropertyIPTCDictionary] = iptc
-            }
-            if let model {
-                properties[kCGImagePropertyTIFFDictionary] = [
-                    kCGImagePropertyTIFFSoftware: model
-                ] as [CFString: Any]
-            }
-            let stage1 = NSMutableData()
-            let stage1Dest = CGImageDestinationCreateWithData(stage1 as CFMutableData, type, 1, nil)!
-            CGImageDestinationAddImageFromSource(stage1Dest, source, 0, properties as CFDictionary)
-            precondition(CGImageDestinationFinalize(stage1Dest), "Pass 1 finalize failed for \(file)")
-
-            // Pass 2: low-level metadata → iptcExt:AIPromptInformation + iptcExt:AISystemUsed.
-            let metadata = CGImageMetadataCreateMutable()
-            precondition(
-                CGImageMetadataRegisterNamespaceForPrefix(metadata, iptcExtURI as CFString, "iptcExt" as CFString, nil),
-                "iptcExt namespace register failed"
-            )
-            if let prompt {
-                setIptcExtTag(metadata, path: "AIPromptInformation", value: prompt, file: file)
-            }
-            if let model {
-                setIptcExtTag(metadata, path: "AISystemUsed", value: model, file: file)
-            }
-            let stage1Source = CGImageSourceCreateWithData(stage1 as CFData, nil)!
-            let buffer = NSMutableData()
-            let cgDest = CGImageDestinationCreateWithData(buffer as CFMutableData, type, 1, nil)!
-            var error: Unmanaged<CFError>?
-            let ok = CGImageDestinationCopyImageSource(
-                cgDest, stage1Source,
-                [kCGImageDestinationMetadata: metadata,
-                 kCGImageDestinationMergeMetadata: true] as CFDictionary,
-                &error
-            )
-            precondition(ok, "CopyImageSource failed for \(file): \(error?.takeRetainedValue().localizedDescription ?? "nil")")
-            out = buffer as Data
+            bytes = embedXMP(data, file: file, prompt: prompt, model: model, subject: subject)
         }
-
-        let dest = getUrl(for: file)
-        let ext = URL(fileURLWithPath: file).pathExtension
-        var tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-        if !ext.isEmpty { tempURL.appendPathExtension(ext) }
-        try! out.write(to: tempURL)
-        if FileManager.default.fileExists(atPath: dest.path) {
-            _ = try! FileManager.default.replaceItemAt(dest, withItemAt: tempURL)
-        } else {
-            try! FileManager.default.moveItem(at: tempURL, to: dest)
-        }
-        precondition(
-            FileManager.default.fileExists(atPath: dest.path),
-            "saveFile: file not present after move at \(dest.path)"
-        )
+        writeBytesToDocuments(bytes, named: file)
     }
 
-    /// Set the like state by writing IPTC StarRating (5 = liked, 0 = not).
-    /// Atomic: every step completes or the function crashes.
+    /// Set the like state by writing `xmp:Rating` (5 = liked, 0 = not).
     public static func like(_ file: String, _ liked: Bool) {
         let url = getUrl(for: file)
-        let source = CGImageSourceCreateWithURL(url as CFURL, nil)!
-        let type = CGImageSourceGetType(source)!
-
-        let rating = liked ? 5 : 0
-        let properties: [CFString: Any] = [
-            kCGImagePropertyIPTCDictionary: [
-                kCGImagePropertyIPTCStarRating: rating
-            ] as [CFString: Any]
-        ]
-
-        let tempURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension(url.pathExtension)
-        let dest = CGImageDestinationCreateWithURL(tempURL as CFURL, type, 1, nil)!
-        CGImageDestinationAddImageFromSource(dest, source, 0, properties as CFDictionary)
-        precondition(CGImageDestinationFinalize(dest), "Finalize failed for \(file)")
-
-        let actual = readIPTCInt(at: tempURL, key: kCGImagePropertyIPTCStarRating) ?? -1
-        precondition(actual == rating,
-                     "rating verify failed for \(file): expected \(rating), got \(actual)")
-
-        _ = try! FileManager.default.replaceItemAt(url, withItemAt: tempURL)
+        let rating: Int32 = liked ? 5 : 0
+        let result = url.path.withCString { psxmp_set_rating($0, rating) }
+        precondition(result == 0, "psxmp_set_rating failed for \(file) with code \(result)")
     }
 
     /// List every file in the app's Documents folder.
@@ -147,6 +64,77 @@ public enum ProjectService {
         for url in getAllGenerations() where isAudio(url) {
             try! FileManager.default.removeItem(at: url)
         }
+        writeBytesToDocuments(data, named: file)
+    }
+
+    /// Returns the URL of the lone audio file in `Documents/`, if any.
+    public static func getAudio() -> URL? {
+        getAllGenerations().first(where: isAudio)
+    }
+
+    /// Read the prompt from `Iptc4xmpExt:AIPromptInformation` (falling back to
+    /// `dc:description[x-default]`). Nil when absent.
+    public static func getPrompt(_ file: String) -> String? {
+        readString(at: getUrl(for: file), psxmp_read_prompt)
+    }
+
+    /// Read the model from `Iptc4xmpExt:AISystemUsed` (falling back to
+    /// `xmp:CreatorTool`). Nil when absent.
+    public static func getModel(_ file: String) -> String? {
+        readString(at: getUrl(for: file), psxmp_read_model)
+    }
+
+    /// Read the subject keywords from `dc:subject`. Nil when absent.
+    public static func getSubject(_ file: String) -> [String]? {
+        let url = getUrl(for: file)
+        let count = url.path.withCString { psxmp_read_subject_count($0) }
+        guard count > 0 else { return nil }
+        var result: [String] = []
+        for i in 0..<count {
+            if let s = readString(at: url, { p, b, l in psxmp_read_subject_at(p, i, b, l) }) {
+                result.append(s)
+            }
+        }
+        return result.isEmpty ? nil : result
+    }
+
+    /// Read the like state from `xmp:Rating` (`>= 1` = liked).
+    public static func getLike(_ file: String) -> Bool {
+        let rating = getUrl(for: file).path.withCString { psxmp_read_rating($0) }
+        return (1...5).contains(rating)
+    }
+
+    public static func getUrl(for file: String) -> URL {
+        documents.appendingPathComponent(URL(fileURLWithPath: file).lastPathComponent)
+    }
+
+    // MARK: - Internals
+
+    private static func embedXMP(
+        _ data: Data, file: String,
+        prompt: String?, model: String?, subject: [String]?
+    ) -> Data {
+        let ext = URL(fileURLWithPath: file).pathExtension
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(ext)
+        try! data.write(to: tempURL)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        let result = tempURL.path.withCString { pathPtr -> Int32 in
+            withOptionalCString(prompt) { promptPtr in
+                withOptionalCString(model) { modelPtr in
+                    withCStringArray(subject ?? []) { arrPtr, count in
+                        psxmp_embed(pathPtr, promptPtr, modelPtr, arrPtr, count)
+                    }
+                }
+            }
+        }
+        precondition(result == 0, "psxmp_embed failed for \(file) with code \(result)")
+        return try! Data(contentsOf: tempURL)
+    }
+
+    private static func writeBytesToDocuments(_ data: Data, named file: String) {
         let dest = getUrl(for: file)
         let ext = URL(fileURLWithPath: file).pathExtension
         var tempURL = FileManager.default.temporaryDirectory
@@ -160,13 +148,8 @@ public enum ProjectService {
         }
         precondition(
             FileManager.default.fileExists(atPath: dest.path),
-            "saveAudio: file not present after move at \(dest.path)"
+            "saveFile: file not present after move at \(dest.path)"
         )
-    }
-
-    /// Returns the URL of the lone audio file in `Documents/`, if any.
-    public static func getAudio() -> URL? {
-        getAllGenerations().first(where: isAudio)
     }
 
     private static let audioExtensions: Set<String> = [
@@ -177,87 +160,40 @@ public enum ProjectService {
         audioExtensions.contains(url.pathExtension.lowercased())
     }
 
-    /// Read the prompt from IPTC Caption/Abstract. Nil when absent.
-    public static func getPrompt(_ file: String) -> String? {
-        readIPTCString(at: getUrl(for: file), key: kCGImagePropertyIPTCCaptionAbstract)
-    }
-
-    /// Read the model from XMP CreatorTool. Nil when absent.
-    public static func getModel(_ file: String) -> String? {
-        let url = getUrl(for: file)
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let metadata = CGImageSourceCopyMetadataAtIndex(source, 0, nil),
-              let tag = CGImageMetadataCopyTagWithPath(metadata, nil, "xmp:CreatorTool" as CFString) else {
-            return nil
+    private static func readString(
+        at url: URL,
+        _ reader: (UnsafePointer<CChar>?, UnsafeMutablePointer<CChar>?, Int32) -> Int32
+    ) -> String? {
+        var buf = [CChar](repeating: 0, count: 8192)
+        let written = url.path.withCString { pathPtr in
+            buf.withUnsafeMutableBufferPointer { bufPtr in
+                reader(pathPtr, bufPtr.baseAddress, Int32(bufPtr.count))
+            }
         }
-        let raw = CGImageMetadataTagCopyValue(tag)
-        let string = (raw as? String) ?? (raw as? NSString).map(String.init)
-        guard let string, !string.isEmpty else { return nil }
-        return string
+        guard written > 0 else { return nil }
+        let bytes = buf.prefix(Int(written)).map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
-    /// Read the subject keywords from IPTC Keywords (XMP `dc:subject`).
-    /// Nil when absent.
-    public static func getSubject(_ file: String) -> [String]? {
-        let url = getUrl(for: file)
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let iptc = props[kCGImagePropertyIPTCDictionary] as? [CFString: Any],
-              let keywords = iptc[kCGImagePropertyIPTCKeywords] as? [String],
-              !keywords.isEmpty else {
-            return nil
+    private static func withOptionalCString<R>(
+        _ s: String?, _ body: (UnsafePointer<CChar>?) -> R
+    ) -> R {
+        if let s {
+            return s.withCString { body($0) }
         }
-        return keywords
+        return body(nil)
     }
 
-    /// Read the like state from IPTC StarRating (`>= 1` = liked).
-    public static func getLike(_ file: String) -> Bool {
-        (readIPTCInt(at: getUrl(for: file), key: kCGImagePropertyIPTCStarRating) ?? 0) >= 1
-    }
-
-    private static func readIPTCString(at url: URL, key: CFString) -> String? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let iptc = props[kCGImagePropertyIPTCDictionary] as? [CFString: Any],
-              let value = iptc[key] as? String,
-              !value.isEmpty else {
-            return nil
+    private static func withCStringArray<R>(
+        _ strings: [String],
+        _ body: (UnsafeMutablePointer<UnsafePointer<CChar>?>?, Int32) -> R
+    ) -> R {
+        if strings.isEmpty { return body(nil, 0) }
+        let dupped = strings.map { strdup($0)! }
+        defer { dupped.forEach { free($0) } }
+        var pointers: [UnsafePointer<CChar>?] = dupped.map { UnsafePointer($0) }
+        return pointers.withUnsafeMutableBufferPointer { buf in
+            body(buf.baseAddress, Int32(strings.count))
         }
-        return value
-    }
-
-    private static func readIPTCInt(at url: URL, key: CFString) -> Int? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let iptc = props[kCGImagePropertyIPTCDictionary] as? [CFString: Any],
-              let value = iptc[key] as? NSNumber else {
-            return nil
-        }
-        return value.intValue
-    }
-
-    public static func getUrl(for file: String) -> URL {
-        documents.appendingPathComponent(URL(fileURLWithPath: file).lastPathComponent)
-    }
-
-    private static let iptcExtURI = "http://iptc.org/std/Iptc4xmpExt/2008-02-29/"
-
-    private static func setIptcExtTag(
-        _ metadata: CGMutableImageMetadata,
-        path: String,
-        value: String,
-        file: String
-    ) {
-        let tag = CGImageMetadataTagCreate(
-            iptcExtURI as CFString,
-            "iptcExt" as CFString,
-            path as CFString,
-            .default,
-            value as CFString
-        )!
-        precondition(
-            CGImageMetadataSetTagWithPath(metadata, nil, "iptcExt:\(path)" as CFString, tag),
-            "iptcExt:\(path) set failed for \(file)"
-        )
     }
 }
