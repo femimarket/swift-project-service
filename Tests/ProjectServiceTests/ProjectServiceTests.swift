@@ -2,6 +2,8 @@ import Testing
 import Foundation
 import ImageIO
 import CoreGraphics
+import CoreVideo
+import AVFoundation
 import XMPToolkit
 @testable import ProjectService
 
@@ -83,6 +85,54 @@ struct ProjectServiceTests {
         let file = name("empty-subject.png")
         ProjectService.saveFile(makePNG(), named: file, subject: [])
         #expect(ProjectService.getSubject(file) == nil)
+    }
+
+    // MARK: - saveFile (video, via Adobe XMP Toolkit smart handler)
+
+    @Test func saveFileWithoutMetadataWritesVideoBytesUnchanged() async throws {
+        let video = await makeMP4()
+        let file = name("plain.mp4")
+        ProjectService.saveFile(video, named: file)
+        let onDisk = try Data(contentsOf: ProjectService.getUrl(for: file))
+        #expect(onDisk == video)
+    }
+
+    @Test func saveFileEmbedsPromptInVideo() async {
+        let file = name("video-prompt.mp4")
+        ProjectService.saveFile(await makeMP4(), named: file, prompt: "a video of a fox")
+        #expect(ProjectService.getPrompt(file) == "a video of a fox")
+    }
+
+    @Test func saveFileEmbedsModelInVideo() async {
+        let file = name("video-model.mp4")
+        ProjectService.saveFile(await makeMP4(), named: file, model: "sora-1")
+        #expect(ProjectService.getModel(file) == "sora-1")
+    }
+
+    @Test func saveFileEmbedsSubjectInVideo() async {
+        let file = name("video-subject.mp4")
+        ProjectService.saveFile(await makeMP4(), named: file, subject: ["fox", "wildlife"])
+        #expect(ProjectService.getSubject(file) == ["fox", "wildlife"])
+    }
+
+    @Test func saveFileEmbedsAllThreeInVideo() async {
+        let file = name("video-all.mp4")
+        ProjectService.saveFile(await makeMP4(), named: file, prompt: "p", model: "m", subject: ["a", "b"])
+        #expect(ProjectService.getPrompt(file) == "p")
+        #expect(ProjectService.getModel(file) == "m")
+        #expect(ProjectService.getSubject(file) == ["a", "b"])
+    }
+
+    @Test func saveFileWritesIptcExtAIPromptInformationInVideo() async {
+        let file = name("video-iptcext-prompt.mp4")
+        ProjectService.saveFile(await makeMP4(), named: file, prompt: "what is AI video")
+        #expect(rawXMPProperty(file: file, ns: iptcExtNS, name: "AIPromptInformation") == "what is AI video")
+    }
+
+    @Test func saveFileWritesIptcExtAISystemUsedInVideo() async {
+        let file = name("video-iptcext-model.mp4")
+        ProjectService.saveFile(await makeMP4(), named: file, model: "sora-1")
+        #expect(rawXMPProperty(file: file, ns: iptcExtNS, name: "AISystemUsed") == "sora-1")
     }
 
     @Test func saveFileOverwritesExisting() {
@@ -225,5 +275,47 @@ struct ProjectServiceTests {
         CGImageDestinationAddImage(dest, image, nil)
         precondition(CGImageDestinationFinalize(dest))
         return buffer as Data
+    }
+
+    /// Build a tiny single-frame H.264 MP4 via AVAssetWriter.
+    private func makeMP4() async -> Data {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("mp4")
+        let writer = try! AVAssetWriter(outputURL: url, fileType: .mp4)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: 16,
+            AVVideoHeightKey: 16,
+        ])
+        input.expectsMediaDataInRealTime = false
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: input,
+            sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+                kCVPixelBufferWidthKey as String: 16,
+                kCVPixelBufferHeightKey as String: 16,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [:],
+            ]
+        )
+        writer.add(input)
+        writer.startWriting()
+        writer.startSession(atSourceTime: .zero)
+
+        var pb: CVPixelBuffer?
+        CVPixelBufferCreate(
+            kCFAllocatorDefault, 16, 16, kCVPixelFormatType_32BGRA,
+            [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &pb
+        )
+        adaptor.append(pb!, withPresentationTime: .zero)
+        input.markAsFinished()
+
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            writer.finishWriting { c.resume() }
+        }
+        precondition(writer.status == .completed, "MP4 writer failed: \(writer.error?.localizedDescription ?? "unknown")")
+        let data = try! Data(contentsOf: url)
+        try? FileManager.default.removeItem(at: url)
+        return data
     }
 }
