@@ -222,6 +222,35 @@ struct ProjectServiceTests {
         #expect(ProjectService.getPrompt(img) == "x")
     }
 
+    // MARK: - characterCast (in-memory)
+
+    @Test func setCharacterCastRoundTripsViaGet() {
+        ProjectService.setCharacterCast("hero.png", "villain.png")
+        let pair = ProjectService.getCharacterCast()
+        #expect(pair?.0 == "hero.png")
+        #expect(pair?.1 == "villain.png")
+    }
+
+    @Test func setCharacterCastSecondCallOverwrites() {
+        ProjectService.setCharacterCast("a.png", "b.png")
+        ProjectService.setCharacterCast("c.png", "d.png")
+        let pair = ProjectService.getCharacterCast()
+        #expect(pair?.0 == "c.png")
+        #expect(pair?.1 == "d.png")
+    }
+
+    @Test func clearCharacterCastAfterSetReturnsNil() {
+        ProjectService.setCharacterCast("hero.png", "villain.png")
+        ProjectService.clearCharacterCast()
+        #expect(ProjectService.getCharacterCast() == nil)
+    }
+
+    @Test func clearCharacterCastWhenEmptyIsNoOp() {
+        ProjectService.clearCharacterCast()
+        ProjectService.clearCharacterCast()
+        #expect(ProjectService.getCharacterCast() == nil)
+    }
+
     // MARK: - getUrl
 
     @Test func getUrlPointsIntoDocuments() {

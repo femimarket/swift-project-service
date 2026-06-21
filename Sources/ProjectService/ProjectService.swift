@@ -108,6 +108,28 @@ public enum ProjectService {
         documents.appendingPathComponent(URL(fileURLWithPath: file).lastPathComponent)
     }
 
+    // MARK: - Operation arguments (in-memory, process-lifetime)
+
+    /// Store the two filenames for the character-cast operation. Any prior
+    /// pair is replaced. No validation is performed.
+    public static func setCharacterCast(_ a: String, _ b: String) {
+        characterCast = (a, b)
+    }
+
+    /// Return the previously-set character-cast pair, or `nil` if nothing
+    /// has been set this process lifetime.
+    public static func getCharacterCast() -> (String, String)? {
+        characterCast
+    }
+
+    /// Drop the stored character-cast pair. Idempotent — no-op when nothing
+    /// is set. After this call, `getCharacterCast()` returns `nil`.
+    public static func clearCharacterCast() {
+        characterCast = nil
+    }
+
+    nonisolated(unsafe) private static var characterCast: (String, String)?
+
     // MARK: - Internals
 
     private static func embedXMP(
