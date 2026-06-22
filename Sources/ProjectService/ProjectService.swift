@@ -130,6 +130,25 @@ public enum ProjectService {
 
     nonisolated(unsafe) private static var characterCast: (String, String)?
 
+    /// Store the filename for the image-edit operation. Any prior value is
+    /// replaced. No validation is performed.
+    public static func setImageEdit(_ file: String) {
+        imageEdit = file
+    }
+
+    /// Return the previously-set image-edit filename, or `nil` if nothing
+    /// has been set this process lifetime.
+    public static func getImageEdit() -> String? {
+        imageEdit
+    }
+
+    /// Drop the stored image-edit filename. Idempotent.
+    public static func clearImageEdit() {
+        imageEdit = nil
+    }
+
+    nonisolated(unsafe) private static var imageEdit: String?
+
     // MARK: - Internals
 
     private static func embedXMP(

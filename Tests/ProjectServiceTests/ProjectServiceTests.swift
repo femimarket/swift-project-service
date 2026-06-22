@@ -251,6 +251,31 @@ struct ProjectServiceTests {
         #expect(ProjectService.getCharacterCast() == nil)
     }
 
+    // MARK: - imageEdit (in-memory)
+
+    @Test func setImageEditRoundTripsViaGet() {
+        ProjectService.setImageEdit("portrait.png")
+        #expect(ProjectService.getImageEdit() == "portrait.png")
+    }
+
+    @Test func setImageEditSecondCallOverwrites() {
+        ProjectService.setImageEdit("a.png")
+        ProjectService.setImageEdit("b.png")
+        #expect(ProjectService.getImageEdit() == "b.png")
+    }
+
+    @Test func clearImageEditAfterSetReturnsNil() {
+        ProjectService.setImageEdit("portrait.png")
+        ProjectService.clearImageEdit()
+        #expect(ProjectService.getImageEdit() == nil)
+    }
+
+    @Test func clearImageEditWhenEmptyIsNoOp() {
+        ProjectService.clearImageEdit()
+        ProjectService.clearImageEdit()
+        #expect(ProjectService.getImageEdit() == nil)
+    }
+
     // MARK: - getUrl
 
     @Test func getUrlPointsIntoDocuments() {
