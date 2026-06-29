@@ -12,3 +12,7 @@ DerivedData/
 # Cargo.lock IS committed (under rust-xmp/) so the XCFramework rebuild is
 # reproducible.
 rust-xmp/target/
+.build/
+.swiftpm/
+build/
+*.xcuserdatad/
